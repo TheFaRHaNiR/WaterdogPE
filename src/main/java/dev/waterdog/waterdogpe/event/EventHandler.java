@@ -19,11 +19,10 @@ import dev.waterdog.waterdogpe.ProxyServer;
 import dev.waterdog.waterdogpe.logger.MainLogger;
 import dev.waterdog.waterdogpe.utils.exceptions.EventException;
 
-import java.util.ArrayList;
 import java.util.EnumMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
 /**
@@ -36,11 +35,16 @@ public class EventHandler {
     private final EventManager eventManager;
     private final Class<? extends Event> eventClass;
 
-    private final Map<EventPriority, ArrayList<Consumer<Event>>> priority2handlers = new EnumMap<>(EventPriority.class);
+    // Filled once here and never changed, so it is safe to read while network threads call events;
+    // the lists take handlers subscribed later (a plugin enabled at runtime) without breaking a call.
+    private final Map<EventPriority, CopyOnWriteArrayList<Consumer<Event>>> priority2handlers = new EnumMap<>(EventPriority.class);
 
     public EventHandler(Class<? extends Event> eventClass, EventManager eventManager) {
         this.eventClass = eventClass;
         this.eventManager = eventManager;
+        for (EventPriority priority : EventPriority.values()) {
+            this.priority2handlers.put(priority, new CopyOnWriteArrayList<>());
+        }
     }
 
     public <T extends Event>  CompletableFuture<T> handle(T event) {
@@ -94,25 +98,18 @@ public class EventHandler {
     }
 
     private void handlePriority(EventPriority priority, Event event) {
-        ArrayList<Consumer<Event>> handlerList = this.priority2handlers.get(priority);
-        if (handlerList != null) {
-            for (Consumer<Event> eventHandler : handlerList) {
-                try {
-                    eventHandler.accept(event);
-                } catch (Throwable t) {
-                    // One broken plugin handler must not break the caller or the remaining handlers.
-                    MainLogger.getLogger().error("Exception was thrown in " + event.getClass().getSimpleName() + " handler", t);
-                }
+        for (Consumer<Event> eventHandler : this.priority2handlers.get(priority)) {
+            try {
+                eventHandler.accept(event);
+            } catch (Throwable t) {
+                // One broken plugin handler must not break the caller or the remaining handlers.
+                MainLogger.getLogger().error("Exception was thrown in " + event.getClass().getSimpleName() + " handler", t);
             }
         }
     }
 
     public void subscribe(Consumer<Event> handler, EventPriority priority) {
-        List<Consumer<Event>> handlerList = this.priority2handlers.computeIfAbsent(priority, priority1 -> new ArrayList<>());
-        // Check if the event is already registered
-        if (!handlerList.contains(handler)) {
-            // Handler is not registered yet
-            handlerList.add(handler);
-        }
+        // Added only if not registered yet
+        this.priority2handlers.get(priority).addIfAbsent(handler);
     }
 }

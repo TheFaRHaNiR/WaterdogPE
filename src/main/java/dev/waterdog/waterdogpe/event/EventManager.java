@@ -17,9 +17,9 @@ package dev.waterdog.waterdogpe.event;
 
 import dev.waterdog.waterdogpe.ProxyServer;
 import dev.waterdog.waterdogpe.utils.ThreadFactoryBuilder;
-import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import lombok.Getter;
 
+import java.util.Map;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
 
@@ -33,7 +33,10 @@ public class EventManager {
     private final ProxyServer proxy;
     @Getter
     private final ExecutorService threadedExecutor;
-    private final Object2ObjectOpenHashMap<Class<? extends Event>, EventHandler> handlerMap = new Object2ObjectOpenHashMap<>();
+    // Events are called from every network thread at once. A plain hash map broke when two of them
+    // added an event type at the same time (ArrayIndexOutOfBoundsException in rehash while handling
+    // a TransferPacket), and from then on calling events could fail for every player.
+    private final Map<Class<? extends Event>, EventHandler> handlerMap = new ConcurrentHashMap<>();
 
     public EventManager(ProxyServer proxy) {
         this.proxy = proxy;
